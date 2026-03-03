@@ -204,27 +204,32 @@ setup_keyring() {
   fi
 
   # Check if the default keyring collection exists.
+  if ! command -v dbus-send >/dev/null 2>&1; then
+    warn "dbus-send not found. Keyring setup skipped — will use plaintext token storage."
+    return 0
+  fi
+
   local alias_result
   alias_result="$(dbus-send --session --dest=org.freedesktop.secrets \
     --type=method_call --print-reply \
     /org/freedesktop/secrets org.freedesktop.Secret.Service.ReadAlias \
     string:"default" 2>/dev/null)" || true
 
-  if printf '%s' "$alias_result" | grep -qv 'object path "/"'; then
+  if printf '%s' "$alias_result" | grep -q 'object path "/org/freedesktop/secrets/collection/'; then
     ok "Default keyring collection exists"
     return 0
   fi
 
   # No default collection — create one by storing a dummy secret.
   # secret-tool will prompt the user to create a new keyring and set a password.
-  info "No default keyring collection found."
-  info "A prompt will appear to create one. Set the password to match your login password"
-  info "so it auto-unlocks on future logins."
-
   if ! command -v secret-tool >/dev/null 2>&1; then
     warn "secret-tool not available. Keyring setup skipped — will use plaintext token storage."
     return 0
   fi
+
+  info "No default keyring collection found."
+  info "A prompt will appear to create one. Set the password to match your login password"
+  info "so it auto-unlocks on future logins."
 
   if printf '%s' "r2d2-init" | secret-tool store --label="r2d2 keyring init" r2d2 init 2>/dev/null; then
     ok "Default keyring collection created"
@@ -283,8 +288,12 @@ main() {
 
   local rc_hint
   case "$(basename "$SHELL")" in
+    bash) rc_hint="$HOME/.bashrc" ;;
     zsh)  rc_hint="$HOME/.zshrc" ;;
-    *)    rc_hint="$HOME/.bashrc" ;;
+    *)
+      rc_hint="$HOME/.bashrc"
+      warn "Unsupported shell '$(basename "$SHELL")' — defaulting to $rc_hint"
+      ;;
   esac
 
   header "done ────────────────────────────────────────"

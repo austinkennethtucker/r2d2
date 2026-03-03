@@ -45,9 +45,9 @@ _r2d2_glab() {
 _r2d2_require_auth() {
   local auth_output
   if ! auth_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)"; then
-    # Token may be stored but API unreachable (TLS certs, network).
+    # Token may be stored but API unreachable (TLS certs, network, invalid token).
     # Let the command through so it surfaces its own error.
-    if printf '%s' "$auth_output" | grep -q "Token found"; then
+    if printf '%s' "$auth_output" | grep -q "Logged in to"; then
       return 0
     fi
     _r2d2_error "Not authenticated to $_R2_HOST"
@@ -81,19 +81,19 @@ _r2d2_auth_plaintext() {
   if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin; then
     # Verify the token was actually stored.
     # glab auth status makes an API call that can fail for reasons
-    # unrelated to auth (TLS certs, network). Check for "Token found"
-    # in the output to distinguish "token missing" from "API unreachable."
+    # unrelated to auth (TLS certs, network, invalid token). Check for
+    # "Logged in to" to distinguish "token missing" from "API unreachable."
     local verify_output
     verify_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)" || true
-    if ! printf '%s' "$verify_output" | grep -q "Token found"; then
+    if ! printf '%s' "$verify_output" | grep -q "Logged in to"; then
       _r2d2_fail "Token not found after login."
       _r2d2_warn "$verify_output"
       _r2d2_warn "Check your PAT and try again."
       return 1
     fi
-    if printf '%s' "$verify_output" | grep -q "API call failed"; then
-      _r2d2_warn "Token stored, but API verification failed (likely a TLS certificate issue)."
-      _r2d2_warn "Install your organization's CA certificates to fix HTTPS access."
+    if printf '%s' "$verify_output" | grep -qE "API call failed|Invalid token"; then
+      _r2d2_warn "Token stored, but API verification failed (TLS certificate issue or expired/invalid token)."
+      _r2d2_warn "Check that your PAT has not expired and has the correct scopes."
     fi
     _r2d2_success "Authentication configured (plaintext storage)."
     return 0
@@ -225,7 +225,7 @@ _r2d2_cmd_config() {
 
   local auth_check
   auth_check="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)" || true
-  if printf '%s' "$auth_check" | grep -q "Token found"; then
+  if printf '%s' "$auth_check" | grep -q "Logged in to"; then
     _r2d2_success "Authentication already configured for $_R2_HOST."
   else
     _r2d2_warn "glab is not authenticated for $_R2_HOST."
@@ -285,9 +285,12 @@ _r2d2_cmd_config() {
 
   # Auto-disable TLS verification for this host when the CA cert chain is
   # untrusted (common on DoD/gov networks with custom CAs).
-  local tls_check
-  tls_check="$(_r2d2_glab api "projects?per_page=1" 2>&1)" || true
-  if printf '%s' "$tls_check" | grep -q "x509\|certificate"; then
+  # Reuse auth_check output when already authenticated to avoid a redundant API call.
+  local tls_check="$auth_check"
+  if ! printf '%s' "$tls_check" | grep -qE "x509|certificate"; then
+    tls_check="$(_r2d2_glab api "projects?per_page=1" 2>&1)" || true
+  fi
+  if printf '%s' "$tls_check" | grep -qE "x509|certificate"; then
     _r2d2_info "Disabling TLS verification for $_R2_HOST (custom CA not in trust store)."
     _r2d2_set_config skip_tls_verify true || err=1
     _r2d2_set_git_config "http.https://$_R2_HOST.sslVerify" "false" || err=1
