@@ -57,14 +57,17 @@ _r2d2_require_auth() {
   fi
 }
 
-# Check whether the D-Bus secrets service (e.g. GNOME Keyring) is reachable.
+# Check whether a system keyring is available.
+# macOS Keychain works without D-Bus; Linux needs the D-Bus secrets service.
 # Returns 0 if keyring is likely usable, 1 otherwise.
 _r2d2_keyring_available() {
-  # No D-Bus session bus → keyring cannot work (common on headless VMs).
+  # macOS: Keychain is always available.
+  [[ "$(uname -s)" == "Darwin" ]] && return 0
+
+  # Linux: D-Bus session bus required for GNOME Keyring / Secret Service.
   [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
 
   # Bus exists but secrets service may not be registered/unlocked.
-  # A quick introspect tells us if anything is listening.
   command -v dbus-send >/dev/null 2>&1 || return 1
   dbus-send --session --dest=org.freedesktop.secrets \
     --type=method_call --print-reply \
