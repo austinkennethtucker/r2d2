@@ -43,8 +43,10 @@ _r2d2_glab() {
 
 # -- Auth helpers ---------------------------------------------------------
 _r2d2_require_auth() {
-  if ! _r2d2_glab auth status --hostname "$_R2_HOST" >/dev/null 2>&1; then
+  local auth_output
+  if ! auth_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)"; then
     _r2d2_error "Not authenticated to $_R2_HOST"
+    _r2d2_warn "$auth_output"
     _r2d2_warn "Run: r2d2 --config"
     return 1
   fi
@@ -67,7 +69,18 @@ _r2d2_auth_with_fallback() {
   printf '%s' "Retry without keyring (plaintext storage)? [y/N]: "
   read -r retry_choice
   if [[ "$retry_choice" =~ ^[Yy]$ ]]; then
+    # Remove the broken host entry left by the failed keyring attempt.
+    # On Ubuntu 18 (GNOME Keyring without D-Bus), the failed --use-keyring
+    # writes a hosts.yml entry that tells glab to read from the keyring.
+    # Without this logout, the plaintext retry can't fully overwrite it,
+    # so glab keeps looking in the empty keyring and reports "not authenticated."
+    _r2d2_glab auth logout --hostname "$_R2_HOST" 2>/dev/null || true
     if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin; then
+      # Verify the token actually works end-to-end (not just stored)
+      if ! _r2d2_glab auth status --hostname "$_R2_HOST" >/dev/null 2>&1; then
+        _r2d2_fail "Token stored but auth verification failed. Check your PAT and try again."
+        return 1
+      fi
       _r2d2_success "Authentication configured (plaintext storage)."
       return 0
     fi
@@ -395,6 +408,12 @@ FLAGS
   -h --help                 Show help for this command.
 EOF
     return 0
+  fi
+
+  if [[ $# -eq 0 ]]; then
+    _r2d2_error "Usage: r2d2 --clone <repo> [-- <gitflags>...]"
+    _r2d2_error "Run 'r2d2 --clone --help' for details."
+    return 1
   fi
 
   _r2d2_require_auth || return 1
