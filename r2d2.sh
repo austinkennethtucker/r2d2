@@ -77,8 +77,11 @@ _r2d2_auth_with_fallback() {
     _r2d2_glab auth logout --hostname "$_R2_HOST" 2>/dev/null || true
     if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin; then
       # Verify the token actually works end-to-end (not just stored)
-      if ! _r2d2_glab auth status --hostname "$_R2_HOST" >/dev/null 2>&1; then
-        _r2d2_fail "Token stored but auth verification failed. Check your PAT and try again."
+      local verify_output
+      if ! verify_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)"; then
+        _r2d2_fail "Token stored but auth verification failed."
+        _r2d2_warn "$verify_output"
+        _r2d2_warn "Check your PAT and try again."
         return 1
       fi
       _r2d2_success "Authentication configured (plaintext storage)."
