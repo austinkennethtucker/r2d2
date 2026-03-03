@@ -45,6 +45,11 @@ _r2d2_glab() {
 _r2d2_require_auth() {
   local auth_output
   if ! auth_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)"; then
+    # Token may be stored but API unreachable (TLS certs, network).
+    # Let the command through so it surfaces its own error.
+    if printf '%s' "$auth_output" | grep -q "Token found"; then
+      return 0
+    fi
     _r2d2_error "Not authenticated to $_R2_HOST"
     _r2d2_warn "$auth_output"
     _r2d2_warn "Run: r2d2 --config"
@@ -76,13 +81,21 @@ _r2d2_auth_with_fallback() {
     # so glab keeps looking in the empty keyring and reports "not authenticated."
     _r2d2_glab auth logout --hostname "$_R2_HOST" 2>/dev/null || true
     if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin; then
-      # Verify the token actually works end-to-end (not just stored)
+      # Verify the token was actually stored.
+      # glab auth status makes an API call that can fail for reasons
+      # unrelated to auth (TLS certs, network). Check for "Token found"
+      # in the output to distinguish "token missing" from "API unreachable."
       local verify_output
-      if ! verify_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)"; then
-        _r2d2_fail "Token stored but auth verification failed."
+      verify_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)" || true
+      if ! printf '%s' "$verify_output" | grep -q "Token found"; then
+        _r2d2_fail "Token not found after login."
         _r2d2_warn "$verify_output"
         _r2d2_warn "Check your PAT and try again."
         return 1
+      fi
+      if printf '%s' "$verify_output" | grep -q "API call failed"; then
+        _r2d2_warn "Token stored, but API verification failed (likely a TLS certificate issue)."
+        _r2d2_warn "Install your organization's CA certificates to fix HTTPS access."
       fi
       _r2d2_success "Authentication configured (plaintext storage)."
       return 0
