@@ -59,13 +59,13 @@ preflight() {
 # -- Step 1: apt dependencies ------------------------------------------------
 
 install_apt_deps() {
-  step "1/4" "Checking apt dependencies"
+  step "1/5" "Checking apt dependencies"
 
   # Map: binary name -> apt package name
   local -a missing=()
-  local -A pkg_map=( [git]=git [jq]=jq [column]=bsdmainutils )
+  local -A pkg_map=( [git]=git [jq]=jq [column]=bsdmainutils [secret-tool]=libsecret-tools )
 
-  for bin in git jq column; do
+  for bin in git jq column secret-tool; do
     local pkg="${pkg_map[$bin]}"
     if dpkg -s "$pkg" >/dev/null 2>&1; then
       ok "$bin"
@@ -112,7 +112,7 @@ install_apt_deps() {
 # -- Step 2: glab -------------------------------------------------------------
 
 install_glab() {
-  step "2/4" "Installing glab"
+  step "2/5" "Installing glab"
 
   if command -v glab >/dev/null 2>&1; then
     local ver
@@ -165,7 +165,7 @@ install_glab() {
 # -- Step 3: r2d2 files -------------------------------------------------------
 
 install_r2d2() {
-  step "3/4" "Installing r2d2"
+  step "3/5" "Installing r2d2"
 
   if [[ -d "$INSTALL_DIR" ]]; then
     if [[ -d "$INSTALL_DIR/.git" ]]; then
@@ -192,10 +192,53 @@ install_r2d2() {
   fi
 }
 
-# -- Step 4: shell rc sourcing ------------------------------------------------
+# -- Step 4: keyring ----------------------------------------------------------
+
+setup_keyring() {
+  step "4/5" "Checking keyring"
+
+  # Skip if no D-Bus session bus (headless/SSH — keyring can't work anyway).
+  if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+    warn "No D-Bus session bus (headless session). Keyring unavailable — will use plaintext token storage."
+    return 0
+  fi
+
+  # Check if the default keyring collection exists.
+  local alias_result
+  alias_result="$(dbus-send --session --dest=org.freedesktop.secrets \
+    --type=method_call --print-reply \
+    /org/freedesktop/secrets org.freedesktop.Secret.Service.ReadAlias \
+    string:"default" 2>/dev/null)" || true
+
+  if printf '%s' "$alias_result" | grep -qv 'object path "/"'; then
+    ok "Default keyring collection exists"
+    return 0
+  fi
+
+  # No default collection — create one by storing a dummy secret.
+  # secret-tool will prompt the user to create a new keyring and set a password.
+  info "No default keyring collection found."
+  info "A prompt will appear to create one. Set the password to match your login password"
+  info "so it auto-unlocks on future logins."
+
+  if ! command -v secret-tool >/dev/null 2>&1; then
+    warn "secret-tool not available. Keyring setup skipped — will use plaintext token storage."
+    return 0
+  fi
+
+  if printf '%s' "r2d2-init" | secret-tool store --label="r2d2 keyring init" r2d2 init 2>/dev/null; then
+    ok "Default keyring collection created"
+    # Clean up the dummy secret
+    secret-tool clear r2d2 init 2>/dev/null || true
+  else
+    warn "Keyring creation failed or was cancelled. Will use plaintext token storage."
+  fi
+}
+
+# -- Step 5: shell rc sourcing ------------------------------------------------
 
 configure_shell() {
-  step "4/4" "Configuring shell"
+  step "5/5" "Configuring shell"
 
   local shell_name
   shell_name="$(basename "$SHELL")"
@@ -235,6 +278,7 @@ main() {
   install_apt_deps
   install_glab
   install_r2d2
+  setup_keyring
   configure_shell
 
   local rc_hint
