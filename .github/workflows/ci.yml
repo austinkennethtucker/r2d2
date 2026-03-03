@@ -28,7 +28,7 @@ jobs:
           sudo apt-get install -y shellcheck zsh
 
       - name: ShellCheck
-        run: shellcheck r2d2.sh
+        run: shellcheck r2d2.sh install.sh
 
       - name: Parse Zsh wrapper
         run: zsh -n r2d2.zsh

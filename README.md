@@ -17,7 +17,15 @@ This helper is fixed to `code.levelup.cce.af.mil`.
 - `jq`
 - `column`
 
-## Setup
+## Quick Install (Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/austinkennethtucker/r2d2/main/install.sh | bash
+```
+
+This installs dependencies, downloads r2d2 to `~/.local/share/r2d2/`, and adds it to your shell rc.
+
+## Manual Setup
 
 Clone this repo anywhere you want to keep it:
 
