@@ -57,10 +57,61 @@ _r2d2_require_auth() {
   fi
 }
 
+# Check whether the D-Bus secrets service (e.g. GNOME Keyring) is reachable.
+# Returns 0 if keyring is likely usable, 1 otherwise.
+_r2d2_keyring_available() {
+  # No D-Bus session bus → keyring cannot work (common on headless VMs).
+  [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || return 1
+
+  # Bus exists but secrets service may not be registered/unlocked.
+  # A quick introspect tells us if anything is listening.
+  command -v dbus-send >/dev/null 2>&1 || return 1
+  dbus-send --session --dest=org.freedesktop.secrets \
+    --type=method_call --print-reply \
+    /org/freedesktop/secrets org.freedesktop.DBus.Peer.Ping \
+    >/dev/null 2>&1
+}
+
+# Store token via plaintext login and verify it was saved.
+_r2d2_auth_plaintext() {
+  local token="$1"
+  if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin; then
+    # Verify the token was actually stored.
+    # glab auth status makes an API call that can fail for reasons
+    # unrelated to auth (TLS certs, network). Check for "Token found"
+    # in the output to distinguish "token missing" from "API unreachable."
+    local verify_output
+    verify_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)" || true
+    if ! printf '%s' "$verify_output" | grep -q "Token found"; then
+      _r2d2_fail "Token not found after login."
+      _r2d2_warn "$verify_output"
+      _r2d2_warn "Check your PAT and try again."
+      return 1
+    fi
+    if printf '%s' "$verify_output" | grep -q "API call failed"; then
+      _r2d2_warn "Token stored, but API verification failed (likely a TLS certificate issue)."
+      _r2d2_warn "Install your organization's CA certificates to fix HTTPS access."
+    fi
+    _r2d2_success "Authentication configured (plaintext storage)."
+    return 0
+  fi
+  _r2d2_fail "Authentication failed."
+  return 1
+}
+
 # Authenticate with keyring, falling back to plaintext on failure.
 # Token is passed as $1 to avoid stdin consumption issues on retry.
 _r2d2_auth_with_fallback() {
   local token="$1"
+
+  # Skip keyring entirely when D-Bus secrets service is unavailable
+  # (headless VMs, containers, Ubuntu 18 without desktop session).
+  if ! _r2d2_keyring_available; then
+    _r2d2_warn "Keyring unavailable (no D-Bus secrets service). Using plaintext storage."
+    _r2d2_auth_plaintext "$token"
+    return $?
+  fi
+
   if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin --use-keyring; then
     if _r2d2_verify_keyring; then
       _r2d2_success "Authentication configured with keyring storage."
@@ -70,37 +121,15 @@ _r2d2_auth_with_fallback() {
     return 0
   fi
 
+  # Keyring attempt failed despite D-Bus being present (locked collection, etc.).
   _r2d2_fail "Authentication with keyring failed."
   printf '%s' "Retry without keyring (plaintext storage)? [y/N]: "
   read -r retry_choice
   if [[ "$retry_choice" =~ ^[Yy]$ ]]; then
     # Remove the broken host entry left by the failed keyring attempt.
-    # On Ubuntu 18 (GNOME Keyring without D-Bus), the failed --use-keyring
-    # writes a hosts.yml entry that tells glab to read from the keyring.
-    # Without this logout, the plaintext retry can't fully overwrite it,
-    # so glab keeps looking in the empty keyring and reports "not authenticated."
     _r2d2_glab auth logout --hostname "$_R2_HOST" 2>/dev/null || true
-    if printf '%s\n' "$token" | _r2d2_glab auth login --hostname "$_R2_HOST" --stdin; then
-      # Verify the token was actually stored.
-      # glab auth status makes an API call that can fail for reasons
-      # unrelated to auth (TLS certs, network). Check for "Token found"
-      # in the output to distinguish "token missing" from "API unreachable."
-      local verify_output
-      verify_output="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)" || true
-      if ! printf '%s' "$verify_output" | grep -q "Token found"; then
-        _r2d2_fail "Token not found after login."
-        _r2d2_warn "$verify_output"
-        _r2d2_warn "Check your PAT and try again."
-        return 1
-      fi
-      if printf '%s' "$verify_output" | grep -q "API call failed"; then
-        _r2d2_warn "Token stored, but API verification failed (likely a TLS certificate issue)."
-        _r2d2_warn "Install your organization's CA certificates to fix HTTPS access."
-      fi
-      _r2d2_success "Authentication configured (plaintext storage)."
-      return 0
-    fi
-    _r2d2_fail "Authentication failed."
+    _r2d2_auth_plaintext "$token"
+    return $?
   fi
   return 1
 }
