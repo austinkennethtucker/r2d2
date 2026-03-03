@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Package Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install shell tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck zsh
+
+      - name: Validate package
+        run: |
+          shellcheck r2d2.sh
+          zsh -n r2d2.zsh
+          bash -lc 'source ./r2d2.sh && r2d2 --clone --help >/dev/null'
+          zsh -fc 'source ./r2d2.zsh && r2d2 --clone --help >/dev/null'
+
+      - name: Derive release version
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+          else
+            version="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build release archives
+        run: |
+          package_dir="dist/r2d2-${VERSION}"
+          mkdir -p "$package_dir"
+          cp README.md r2d2.sh r2d2.zsh "$package_dir"/
+          tar -C dist -czf "dist/r2d2-${VERSION}.tar.gz" "r2d2-${VERSION}"
+          (
+            cd dist
+            zip -rq "r2d2-${VERSION}.zip" "r2d2-${VERSION}"
+          )
+
+      - name: Generate checksums
+        run: |
+          sha256sum dist/*.tar.gz dist/*.zip > "dist/r2d2-${VERSION}-sha256.txt"
+
+      - name: Upload workflow artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: r2d2-${{ env.VERSION }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*-sha256.txt
+
+      - name: Publish GitHub release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/*.tar.gz dist/*.zip dist/*-sha256.txt --clobber
+          else
+            gh release create "$VERSION" dist/*.tar.gz dist/*.zip dist/*-sha256.txt --title "$VERSION" --generate-notes
+          fi
