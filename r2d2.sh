@@ -191,7 +191,9 @@ _r2d2_cmd_config() {
     err=1
   fi
 
-  if _r2d2_glab auth status --hostname "$_R2_HOST" >/dev/null 2>&1; then
+  local auth_check
+  auth_check="$(_r2d2_glab auth status --hostname "$_R2_HOST" 2>&1)" || true
+  if printf '%s' "$auth_check" | grep -q "Token found"; then
     _r2d2_success "Authentication already configured for $_R2_HOST."
   else
     _r2d2_warn "glab is not authenticated for $_R2_HOST."
@@ -245,6 +247,47 @@ _r2d2_cmd_config() {
         ;;
       *)
         _r2d2_warn "Invalid choice. Run manually: glab auth login --hostname $_R2_HOST --use-keyring"
+        ;;
+    esac
+  fi
+
+  # Detect TLS certificate errors (common on DoD/gov networks with custom CAs).
+  local tls_check
+  tls_check="$(_r2d2_glab api "projects?per_page=1" 2>&1)" || true
+  if printf '%s' "$tls_check" | grep -q "x509\|certificate"; then
+    _r2d2_warn "TLS certificate verification is failing for $_R2_HOST."
+    _r2d2_warn "This is common on DoD/gov networks with custom CA certificates."
+    echo "  1) Provide path to CA certificate bundle"
+    echo "  2) Disable TLS verification for this host only (less secure)"
+    echo "  3) Skip (fix manually later)"
+    printf '%s' "Choice [1-3]: "
+    read -r tls_choice
+
+    case "$tls_choice" in
+      1)
+        echo "Path to CA certificate file (tab completion enabled): "
+        local ca_path=""
+        read -e -r -p "> " ca_path
+        ca_path="${ca_path/#\~/$HOME}"
+        if [[ -f "$ca_path" ]]; then
+          _r2d2_set_config ca_cert "$ca_path" || err=1
+          _r2d2_set_git_config "http.https://$_R2_HOST.sslCAInfo" "$ca_path" || err=1
+        else
+          _r2d2_error "File not found: $ca_path"
+          err=1
+        fi
+        ;;
+      2)
+        _r2d2_warn "Disabling TLS verification for $_R2_HOST only."
+        _r2d2_set_config skip_tls_verify true || err=1
+        _r2d2_set_git_config "http.https://$_R2_HOST.sslVerify" "false" || err=1
+        ;;
+      3)
+        _r2d2_warn "Skipped. glab and git commands to $_R2_HOST will fail until TLS is configured."
+        _r2d2_warn "Fix system-wide: install CA certs into /usr/local/share/ca-certificates/ and run update-ca-certificates"
+        ;;
+      *)
+        _r2d2_warn "Invalid choice. Fix TLS manually before using r2d2."
         ;;
     esac
   fi
