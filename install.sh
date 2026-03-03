@@ -49,6 +49,11 @@ preflight() {
   else
     HAS_SUDO=true
   fi
+
+  # Remove stale apt proxy config that blocks package downloads on some VMs
+  if [[ "$HAS_SUDO" == "true" ]]; then
+    sudo rm -f /etc/apt/apt.conf.d/00aptproxy
+  fi
 }
 
 # -- Step 1: apt dependencies ------------------------------------------------
