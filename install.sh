@@ -237,9 +237,15 @@ main() {
   install_r2d2
   configure_shell
 
+  local rc_hint
+  case "$(basename "$SHELL")" in
+    zsh)  rc_hint="$HOME/.zshrc" ;;
+    *)    rc_hint="$HOME/.bashrc" ;;
+  esac
+
   header "done ────────────────────────────────────────"
   echo ""
-  echo "  Open a new terminal, then run: r2d2 --config"
+  echo "  Run: source $rc_hint && r2d2 --config"
   echo ""
 }
 
